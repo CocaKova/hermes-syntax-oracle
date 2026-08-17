@@ -1,0 +1,8 @@
+name: syntax-oracle
+version: "0.2.0"
+description: "Turn a Python SyntaxError in a tool result into a deterministic, compile-verified diagnosis — which `{`/`(`/`[` is unclosed or surplus, where, and the one edit that makes the file parse — so small local models stop blaming tool escaping / the linter / the interpreter for their own bracket typos. Observational: nothing is blocked. Silent unless the tokenizer's finding matches Python's own message."
+author: "CocaKova"
+homepage: https://github.com/CocaKova/hermes-syntax-oracle
+license: MIT
+hooks:
+  - transform_tool_result
