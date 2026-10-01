@@ -1,8 +1,25 @@
-# syntax-oracle
+<p align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="assets/hero-dark.svg">
+    <img alt="hermes-syntax-oracle: a SyntaxError in a tool result, recover the source, tokenizer diagnosis that must agree with Python, compile-checked one-edit fix, then a verdict appended or silence" src="assets/hero-light.svg" width="100%">
+  </picture>
+</p>
 
-**A [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin that turns a Python `SyntaxError` in a tool result into a deterministic, compile-verified diagnosis — so small local models stop blaming the tools for their own bracket typos.**
+<p align="center">
+  <a href="https://github.com/CocaKova/hermes-syntax-oracle/actions/workflows/ci.yml"><img alt="CI" src="https://github.com/CocaKova/hermes-syntax-oracle/actions/workflows/ci.yml/badge.svg"></a>
+  <img alt="Tested on Python 3.10 to 3.14" src="https://img.shields.io/badge/python-3.10%E2%80%933.14-3776ab">
+  <img alt="Hermes Agent plugin" src="https://img.shields.io/badge/Hermes%20Agent-plugin-555">
+  <img alt="No dependencies" src="https://img.shields.io/badge/dependencies-none-2ea44f">
+  <a href="LICENSE"><img alt="MIT" src="https://img.shields.io/badge/license-MIT-blue"></a>
+</p>
 
-Stdlib only. Observational (blocks nothing). Silent unless it is sure.
+syntax-oracle is a [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin for agents
+that write Python. When a tool result contains a `SyntaxError`, `IndentationError` or `TabError`, it
+replays Python's tokenizer over the source, works out which bracket is unclosed, surplus or the wrong
+kind, and appends that to the tool result together with a one-character fix it has checked with
+`compile()`. Small local models are bad at counting brackets and can't tell that they are. Given a
+bracket error they tend to blame the tools; this hands them the answer instead. It speaks only when
+its finding agrees with Python's own message, blocks nothing, and uses the standard library only.
 
 ```
 🔎 syntax-oracle — deterministic diagnosis from Python's tokenizer, not a guess:
@@ -18,34 +35,15 @@ Stdlib only. Observational (blocks nothing). Silent unless it is sure.
   rewrite the line into a different shape without fixing it.
 ```
 
-## Why
-
-Small local models are unreliable at counting brackets — and they cannot tell that they are unreliable at it.
-
-The line above is real. A 27B agent wrote it, Python said `closing parenthesis ']' does not match opening parenthesis '{'`, and the model — having "counted" the braces three separate times in its reasoning and gotten two `}` after `"Opportunity"` every time — resolved the contradiction by blaming everything it couldn't see: the tool's bracket escaping, the linter ("false positive"), shell quoting, the Python build, at one point the machine's custom kernel. It hexdumped the file to look for hidden characters. Eight tool calls later it rewrote the line into a different shape without ever finding the missing `}`. Then it did the same thing again with a missing `)` on the next script, and announced that "the terminal layer is corrupting `(` inside double-quoted strings."
-
-Prompting harder ("trust the linter") fights the model's own perception. The durable fix is to **hand the model the fact it cannot compute** — and to make that fact impossible to argue with by proving it: *this one edit makes the whole file compile*.
-
-## What it does
-
-It hooks Hermes's `transform_tool_result` seam (the same one upstream's `security-guidance` plugin uses). For every tool result it does a substring check for `SyntaxError` / `IndentationError` / `TabError`; on a miss it costs nothing. On a hit:
-
-1. **Locate the error** — traceback shape (`File "…", line N` + caret + `SyntaxError: msg`) or Hermes's in-process lint shape (`SyntaxError: msg (line N, column M)`). Runtime frames (`, in <module>`) are skipped.
-2. **Recover the source** — from the tool args (`write_file.content`, `execute_code.code`), from the file the traceback names (guarded, see *Safety*), or as a fallback from the single echoed line.
-3. **Diagnose with the tokenizer** — replay the delimiter stack over the source: which `(`/`[`/`{` is still open, which closer arrived while something else was on top, which closer has no opener. Indentation errors get their own analysis (tab/space mix rendered visibly as `→`/`·`, dedent levels that don't exist, an "unexpected indent" that is really a continuation line whose bracket was closed too early).
-4. **Check consistency** — the finding must agree with Python's own message and caret (same delimiter characters, same line, same column). If it doesn't, the plugin says nothing. A wrong diagnosis would be worse than none: it would become one more thing for the model to be confused by.
-5. **Search for a repair** — try the handful of one-character edits the finding implies (insert the missing closer here / at the end of that line / where the indentation says the construct should have ended; delete the surplus one; the closer is the wrong kind; an opener fused two identifiers…), `compile()` each, and report the first that makes the **whole file** parse. Bounded (≤160 compiles, ≤1.5 s, files ≤200 KiB). Where the finding is only plausible rather than certain (generic `invalid syntax`, f-string brace errors), it is reported *only* if a verified fix exists.
-6. **Append the verdict** to the tool result. The file is still written, the command still ran; the model just sees the answer in the next turn.
-
-Static one-line hints cover a few messages that need no analysis but routinely derail small models (`f-string expression part cannot include a backslash`, unterminated strings, "Perhaps you forgot a comma?", `cannot assign to`, `invalid decimal literal`).
-
-## Install
+## Quick start
 
 ```bash
-git clone https://github.com/CocaKova/hermes-syntax-oracle ~/.hermes/plugins/syntax-oracle
+hermes plugins install CocaKova/hermes-syntax-oracle --enable
+hermes gateway restart
 ```
 
-Enable it in `~/.hermes/config.yaml`:
+The plugin installs under the name `syntax-oracle` (from `plugin.yaml`). If you installed without
+`--enable`, run `hermes plugins enable syntax-oracle`, or add it to `~/.hermes/config.yaml`:
 
 ```yaml
 plugins:
@@ -53,23 +51,92 @@ plugins:
     - syntax-oracle
 ```
 
-Then restart Hermes — the gateway **and** the dashboard/TUI server if you run them as services (`systemctl --user restart hermes-gateway hermes-dashboard`). Plugins load at process start.
+You can also clone it straight into the plugins directory:
 
-Check: `hermes plugins list` should show `syntax-oracle  enabled`.
+```bash
+git clone https://github.com/CocaKova/hermes-syntax-oracle ~/.hermes/plugins/syntax-oracle
+hermes plugins enable syntax-oracle
+```
 
-Off switch without uninstalling: `SYNTAX_ORACLE_DISABLE=1` in the environment.
+Plugins load at process start, so restart the gateway and any other long-running Hermes process (the
+dashboard, for example). `hermes plugins list --enabled` should then include `syntax-oracle`.
 
-Requires Python 3.10+ (tested on 3.10 – 3.14). No dependencies.
+To switch it off without uninstalling, set `SYNTAX_ORACLE_DISABLE=1` in the environment of the
+Hermes process. There are no other settings.
 
-## Battle-tested
+## Why
 
-Correctness matters more than coverage here — a confidently wrong bracket-stack readout would be a new conspiracy for the model — so the test suite is built around ground truth:
+The verdict above comes from a real session. A 27B agent wrote that line, and Python said
+`closing parenthesis ']' does not match opening parenthesis '{'`. The model had "counted" the braces
+three times in its reasoning and got two `}` after `"Opportunity"` every time. It resolved the
+contradiction by blaming everything it couldn't see: the tool's bracket escaping, the linter ("false
+positive"), shell quoting, the Python build, at one point the machine's custom kernel. It hexdumped
+the file looking for hidden characters. Eight tool calls later it rewrote the line into a different
+shape without ever finding the missing `}`. On the next script it did the same with a missing `)`,
+and announced that "the terminal layer is corrupting `(` inside double-quoted strings."
 
-* `tests/fuzz_mutations.py` takes real, valid Python files (the running interpreter's own stdlib), applies one random delimiter mutation (delete an opener / delete a closer / insert a surplus closer / swap a delimiter for the wrong kind), asks the **real interpreter** for the message, runs the plugin, and grades: does the finding point at the mutated character, or does the plugin's verified fix edit that exact position, or at least compile? Any finding whose derived edits all fail to compile is a `WRONG` and fails the run.
-* `tests/test_real_tracebacks.py` runs broken snippets as real subprocesses and pushes the genuine stderr through the full `terminal` / `execute_code` / `write_file` result paths.
-* `tests/test_verdicts.py` replays the incident that motivated the plugin, plus silence/safety regressions.
+Prompting harder ("trust the linter") fights the model's own perception. What works is handing the
+model the fact it can't compute, and making that fact hard to argue with by proving it: this one
+edit makes the whole file compile.
 
-Typical fuzz run (560 mutations per interpreter, whole-file mode):
+## How it works
+
+It uses Hermes' `transform_tool_result` hook, the same one the bundled `security-guidance` plugin
+uses. Every tool result gets a substring check for `SyntaxError` / `IndentationError` / `TabError`;
+on a miss that is all it costs. On a hit:
+
+1. **Locate the error.** Either the traceback shape (`File "…", line N`, caret,
+   `SyntaxError: msg`) or the shape of Hermes' in-process lint (`SyntaxError: msg (line N, column M)`).
+   Runtime frames (`, in <module>`) are skipped.
+2. **Recover the source.** From the tool arguments (`write_file` content, `execute_code` code), from
+   the file a `patch` call edited, or from the `.py` file the traceback names (guarded, see
+   [Safety](#safety)). As a last resort, from the single line Python echoed.
+3. **Diagnose with the tokenizer.** Replay the delimiter stack over the source: which `(`, `[` or `{`
+   is still open, which closer arrived while something else was on top, which closer has no opener.
+   Indentation errors get their own analysis: tab/space mixes rendered visibly as `→` and `·`, dedent
+   levels that don't exist, and an "unexpected indent" that is really a continuation line whose bracket
+   was closed too early.
+4. **Check against Python.** The finding must agree with Python's message and caret (same delimiter
+   characters, same line, same column). If it doesn't, the plugin says nothing. A wrong diagnosis
+   would be worse than none, since it would be one more thing for the model to be confused by.
+5. **Search for a repair.** Try the few one-character edits the finding implies (insert the missing
+   closer here, at the end of that line, or where the indentation says the construct ended; delete the
+   surplus one; swap a closer of the wrong kind; put back an opener that vanished between two identifiers),
+   `compile()` each, and report the first that makes the **whole file** parse. The search is bounded:
+   at most 160 compiles (80 for sources over 50 KiB), 1.5 seconds, and sources up to 200 KiB. When the
+   finding is plausible but not certain (generic `invalid syntax`, f-string brace errors), it is
+   reported only if a verified fix exists.
+6. **Append the verdict** to the tool result. The file is still written and the command still ran;
+   the model sees the answer on its next turn.
+
+A few messages need no analysis but reliably derail small models. Those get a fixed one-line hint:
+an f-string expression with a backslash (before Python 3.12), f-string brace errors, unterminated
+strings, "Perhaps you forgot a comma?", `cannot assign to`, and `invalid decimal literal`.
+
+The plugin doesn't patch Hermes source or touch the gateway, and it imports nothing from Hermes. The
+whole plugin is `__init__.py` plus `plugin.yaml`.
+
+## How it's tested
+
+Correctness matters more than coverage here. A confidently wrong bracket readout would give the
+model a new conspiracy, so the tests are built around ground truth:
+
+- `tests/fuzz_mutations.py` takes real, valid Python files (the running interpreter's own stdlib),
+  applies one random delimiter mutation (delete an opener, delete a closer, insert a surplus closer,
+  swap a delimiter for the wrong kind), asks the **real interpreter** for the error message, runs the
+  plugin, and grades the result: does the finding point at the mutated character, does the verified fix
+  edit that exact position, or does it at least compile? A finding whose derived edits all fail to
+  compile counts as `WRONG` and fails the run.
+- `tests/test_real_tracebacks.py` runs broken snippets as real subprocesses and feeds the genuine
+  stderr through the `terminal`, `execute_code` and `write_file` result paths.
+- `tests/test_verdicts.py` replays the session that motivated the plugin, plus regressions for
+  silence and safety.
+
+CI runs the pytest suite (which includes a small fuzz slice) and then a fuzz run of
+`--files 60 --per-file 8 --seed 7` on Python 3.10 to 3.14.
+
+Typical results from development fuzz runs (about 560 graded mutations per interpreter, whole-file
+mode):
 
 | Python | exact | fix-exact | fix-verified | silent | WRONG |
 |--------|------:|----------:|-------------:|-------:|------:|
@@ -79,41 +146,66 @@ Typical fuzz run (560 mutations per interpreter, whole-file mode):
 | 3.13   | 29–31% | 62–64% | 7–8% | ≤1% | 0 |
 | 3.14   | 25–28% | 64–66% | 8–9% | ≤1% | 0 |
 
-*exact* = the diagnosis itself points at the mutated character; *fix-exact* = the compile-verified fix edits the mutated position; *fix-verified* = a different one-edit fix that also compiles (e.g. deleting the partner instead of re-inserting); *silent* = no verdict (the safe failure). Across ~15,000 mutations during development the last remaining `WRONG` classes were fixed one by one; the fuzzer exits non-zero if any reappear.
+*exact*: the diagnosis itself points at the mutated character. *fix-exact*: the compile-verified fix
+edits the mutated position. *fix-verified*: a different one-edit fix that also compiles (for example,
+deleting the partner instead of re-inserting). *silent*: no verdict, which is the safe failure. Across
+about 15,000 mutations during development the remaining `WRONG` classes were fixed one at a time, and
+the fuzzer exits non-zero if any come back.
 
-Cost when it fires: mean ≈ 8 ms, p95 ≈ 30 ms, worst seen ≈ 300 ms on 50 KiB files; ≤150 ms on a 150 KiB file. When it doesn't fire (every normal tool call): one substring check.
+Cost when it fires, measured during development: mean about 8 ms, p95 about 30 ms, worst seen about
+300 ms on 50 KiB files, and up to 150 ms on a 150 KiB file. When it doesn't fire (nearly every tool
+call), it costs one substring check.
 
-Run everything: `python -m pytest tests` — or the scripts directly, e.g. `python tests/fuzz_mutations.py --files 80 --per-file 8 --seed 7 -v`.
+```bash
+python -m pytest tests
+python tests/fuzz_mutations.py --files 80 --per-file 8 --seed 7 -v
+```
 
 ## Safety
 
-The plugin reads files named in tool output. Tool output can contain attacker-controlled text (a `curl`, a log with a web page in it), and a forged `File "…", line N … SyntaxError:` could name any readable file. Two limits keep this from becoming a way to echo arbitrary file lines into the model's context:
+The plugin reads files named in tool output, and tool output can contain text an attacker controls
+(a `curl`, a log with a web page in it). A forged `File "…", line N … SyntaxError:` could name any
+readable file. Two limits keep that from becoming a way to echo arbitrary file lines into the model's
+context:
 
-* only `.py` / `.pyw` / `.pyi` files under 512 KiB are ever read, and
-* a file is only used if it genuinely fails to compile — a stale or forged traceback pointing at a clean file yields silence.
+- only absolute paths to `.py`, `.pyw` or `.pyi` files of at most 512 KiB are ever read, and
+- a file is used only if it really fails to compile. A stale or forged traceback that points at a
+  clean file gets silence.
 
-Verdicts quote at most a couple of lines of the offending source, which the model already had access to (it wrote or ran it).
+Verdicts quote at most a couple of lines of the offending source, which the model already had (it
+wrote or ran it).
 
-## Limitations, honestly
+## Limitations
 
-* Python only. JSON/YAML/TOML lint errors from `write_file` are not diagnosed (yet — see roadmap).
-* Line-only mode (traceback echo, source unavailable — e.g. `python -c` one-liners) is context-blind: it trusts Python's caret column and stays silent ~20% of the time where whole-file mode would speak.
-* A compile-verified fix is *syntactically* right; the model still has to judge whether it matches intent. Candidate ordering favours the likely-intended edit (nearest position, indentation evidence, a known identifier split), but `foo(a, b))` can be fixed by deleting either `)`.
-* Delimiters that vanish *inside* an identifier (`os.makedirs(self.x` → `os.makedirsself.x`) are found only when the resulting fused name has a prefix that exists elsewhere in the file, or the budget reaches the last-resort tier.
-* If more than one thing is wrong, the verdict says so and diagnoses the first.
+- **A personal project.** Not affiliated with or endorsed by Nous Research. Provided as is, under the
+  MIT license.
+- **Python only.** JSON, YAML and TOML lint errors from `write_file` are not diagnosed.
+- **Line-only mode is context-blind.** When the source isn't available (a `python -c` one-liner, for
+  example), it trusts Python's caret column and stays silent about 20% of the time where whole-file
+  mode would speak.
+- **A verified fix is syntactically right, not necessarily what you meant.** Candidate order favours
+  the likely-intended edit (nearest position, indentation evidence, a known identifier split), but
+  `foo(a, b))` can be fixed by deleting either `)`.
+- **Delimiters that vanish inside an identifier** (`os.makedirs(self.x` becoming `os.makedirsself.x`)
+  are found only when the fused name starts with a name used elsewhere in the file, or when the
+  search budget reaches its last-resort tier.
+- **One error at a time.** It diagnoses the first error Python reports. When no single edit makes the
+  file compile, the verdict says more than one thing may be wrong.
+- **One `transform_tool_result` answer per result.** Hermes keeps the first plugin that returns a
+  string for a given result. If another enabled plugin rewrites the same result (`security-guidance`
+  on a `write_file`, or [kibisis](https://github.com/CocaKova/hermes-kibisis) on a networked
+  `execute_code`), only one applies, depending on load order.
+- **What's tested.** CI runs on Ubuntu only, and the tests call the plugin directly rather than
+  through a live Hermes. Current Hermes requires Python 3.11 or newer, so the 3.10 row only matters if
+  you run the code outside Hermes. macOS and Windows are untested.
 
 ## Roadmap
 
-* JSON / YAML / TOML: `write_file`'s in-process linters emit `JSONDecodeError: … (line N, column M)` — same seam, same idea (unclosed `{`, trailing comma, single quotes).
-* Other languages' brace errors (JS/TS via `node --check`, shell `unexpected EOF while looking for matching`) where the tool result already carries a precise message.
-* Upstream: this is a plain Hermes plugin; if it proves useful it may be proposed to `plugins/` in hermes-agent.
-
-## How it relates to Hermes
-
-* Uses `transform_tool_result` (observational, replace-by-returning-a-string). No source patches, no gateway changes, survives `hermes update`.
-* That hook is first-string-wins across plugins: if another enabled plugin also rewrites the same result (e.g. `security-guidance` on a `write_file`), whichever loaded first wins on that one result. Rare overlap; harmless.
-* Uses no Hermes internals — the whole plugin is `__init__.py` + `plugin.yaml`.
+- JSON, YAML, TOML: `write_file`'s in-process linters emit `JSONDecodeError: … (line N, column M)`.
+  Same hook, same idea (unclosed `{`, trailing comma, single quotes).
+- Brace errors in other languages (JS/TS via `node --check`, shell `unexpected EOF while looking for
+  matching`) where the tool result already carries a precise message.
 
 ## License
 
-MIT — see `LICENSE`.
+[MIT](LICENSE).
