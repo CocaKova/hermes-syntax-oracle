@@ -23,10 +23,10 @@ spec.loader.exec_module(so)
 V = "-v" in sys.argv
 CASES = [
     # name, source, expected substring in verdict (None → must be silent), expect verified fix
-    ("missing } (Silas line 38)",
+    ("missing } (agent line 38)",
      'import json\noid = "x"\nwhere_note = json.dumps([{"parentType": {"eq": "Opportunity"}, {"parentId": {"eq": oid}}])\nprint(where_note)\n',
      "`{` opened at col 26 is never closed", True),
-    ("missing ) (Silas print)",
+    ("missing ) (agent print)",
      'label="a"\nnote={"k":1}\nk="k"\nprint("(%s) %s" % (label, str(note[k])[:500])\nprint(2)\n',
      "`(` opened at col 6 has no matching `)`", True),
     ("surplus )", 'x = (1 + 2))\n', "`)` at col 12 has no opener", True),

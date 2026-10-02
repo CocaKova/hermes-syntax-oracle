@@ -30,7 +30,7 @@ def run_all():
     global fails
     fails = 0
 
-    # 1. Silas's line 38: missing } after "Opportunity"} — write_file lint shape
+    # 1. the agent's line 38: missing } after "Opportunity"} — write_file lint shape
     src1 = 'import json\noid = "x"\nwhere_note = json.dumps([{"parentType": {"eq": "Opportunity"}, {"parentId": {"eq": oid}}])\nprint(where_note)\n'
     check("write_file lint: mismatch ] vs {", "write_file", {"path": "/tmp/x.py", "content": src1},
           {"bytes_written": 1, "verified": True, "lint": {"status": "error", "output": "SyntaxError: closing parenthesis ']' does not match opening parenthesis '{' (line 3, column 89)"}},
@@ -41,13 +41,13 @@ def run_all():
     check("terminal echoed-line: mismatch", "terminal", {"command": "python3 /nonexistent/status_report.py"},
           {"output": tb2, "exit_code": 1}, "`{` opened at col 26 is never closed")
 
-    # 3. Silas's second bug: missing ) — execute_code with full source
+    # 3. the agent's second bug: missing ) — execute_code with full source
     src3 = 'label="a"\nnote={"k":1}\nk="k"\nprint("(%s) %s" % (label, str(note[k])[:500])\nprint(2)\n'
     check("execute_code: never closed (", "execute_code", {"code": src3},
           {"status": "error", "output": "\n--- stderr ---\n  File \"/tmp/hermes_sandbox_q/script.py\", line 4\n    print(\"(%s) %s\" % (label, str(note[k])[:500])\n         ^\nSyntaxError: '(' was never closed\n"},
           "line 4: `(` opened at col 6 has no matching `)`")
 
-    # 4. Silas's first bug: f-string backslash → static hint only
+    # 4. the agent's first bug: f-string backslash → static hint only
     check("f-string backslash hint", "execute_code", {"code": 'x=1\n'},
           {"status": "error", "output": "  File \"/tmp/s.py\", line 33\n    tasks = get(f\"?where=[{{\\\"a\\\"}}]\")\n    ^\nSyntaxError: f-string expression part cannot include a backslash\n"},
           "may not contain a backslash")
